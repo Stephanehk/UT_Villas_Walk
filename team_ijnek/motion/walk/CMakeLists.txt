@@ -31,7 +31,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(walk_msg REQUIRED)
 find_package(walk_sensor_msg REQUIRED)
 find_package(message_filters REQUIRED)
-
+find_package(walk_utils REQUIRED)
 
 ament_export_include_directories(include)
 
@@ -46,7 +46,8 @@ ament_target_dependencies(walk
   biped_interfaces
   walk_msg
   message_filters
-  walk_sensor_msg)
+  walk_sensor_msg
+  walk_utils)
 
 # Build walk_node
 add_executable(walk_node src/walk_node.cpp)

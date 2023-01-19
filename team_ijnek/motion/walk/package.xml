@@ -24,6 +24,7 @@
   <depend>walk_msg</depend>
   <depend>walk_sensor_msg</depend>
   <depend>message_filters</depend>
+  <depend>walk_utils</depend>
 
   
   <export>
