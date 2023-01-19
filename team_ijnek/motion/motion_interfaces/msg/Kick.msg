@@ -1,0 +1,1 @@
+bool use_left_foot
