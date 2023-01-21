@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#include <cmath>
 
 #ifndef WALK__MATHS_FUNCTIONS_HPP_
 #define WALK__MATHS_FUNCTIONS_HPP_
@@ -18,5 +19,18 @@
 float parabolicStep(float dt, float time, float period, float deadTimeFraction = 0);
 float parabolicReturnMod(float f);
 float linearStep(float time, float period);
+
+template <typename T>
+inline static T crop(const T &x, const T &minimum, const T &maximum)
+{
+   if (x < minimum) {
+      return minimum;
+   } else if (x > maximum) {
+      return maximum;
+   } else {
+      return x;
+   }
+}
+
 
 #endif  // WALK__MATHS_FUNCTIONS_HPP_

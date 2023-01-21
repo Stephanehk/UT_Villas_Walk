@@ -21,7 +21,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "walk_msg/msg/walk.hpp"
 #include "walk_sensor_msg/msg/sensor.hpp"
-
+#include "walk/XYZ_Coord.hpp"
 
 
 class Walk
@@ -204,7 +204,6 @@ private:
   
 
   
-};
 
 
 // Use for iterative inverse kinematics for turning (see documentation BH 2010)
@@ -227,6 +226,13 @@ float calculateKneeStiffness(float volume);
 float calculateAnkleStiffness(float volume);
 
 
+// Foot to Body coord transform used to calculate IK foot position and ankle tilts to keep foot in ground plane when turning
+ XYZ_Coord mf2b(float Hyp, float Hp, float Hr, float Kp, float Ap,
+                  float Ar, float xf, float yf, float zf);
+ Hpr hipAngles(float Hyp, float Hp, float Hr, float Kp, float Ap,
+                 float Ar, float xf, float yf, float zf, XYZ_Coord e);
 
+ float clamp(const int min, float value, const int max) const;
 
 #endif  // KICK__KICK_HPP_
+};

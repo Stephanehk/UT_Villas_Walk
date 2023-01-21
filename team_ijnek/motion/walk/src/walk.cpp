@@ -26,9 +26,11 @@
 #include "walk/walk.hpp"
 #include "walk/maths_functions.hpp"
 #include "std_msgs/msg/string.hpp"
-#include "walk_utils/MotionDefs.hpp"
 // #include "walk/bodyV5.hpp"
-#include "walk_utils/bodyV6.hpp"
+#include "walk/bodyV6.hpp"
+#include "walk/MotionDefs.hpp"
+#include "walk/XYZ_Coord.hpp"
+
 
 #define KICK_STEP_HEIGHT 0.065  // how far to lift kicking foot
 
@@ -172,6 +174,68 @@ void Walk::notifyJoints(walk_sensor_msg::msg::Sensor sensor_readings)
 }
 
 
+
+float ellipsoidClampWalk(float &forward, float &left, float &turn, float speed) {
+    const float MIN_SPEED = 0.0f;
+    const float MAX_SPEED = 1.0f;
+    speed = crop(speed, MIN_SPEED, MAX_SPEED);
+
+    // limit max to 66-100% depending on speed
+    float M_FORWARD = MAX_FORWARD * 0.66 + MAX_FORWARD * 0.34 * speed;
+    float M_LEFT = MAX_LEFT * 0.66 + MAX_LEFT * 0.34 * speed;
+    float M_TURN = MAX_TURN * 0.66 + MAX_TURN * 0.34 * speed;
+
+    // Values in range [-1..1]
+    float forwardAmount = forward / M_FORWARD;
+    float leftAmount = left / M_LEFT;
+    float turnAmount = turn / M_TURN;
+
+    float x = fabs(forwardAmount);
+    float y = fabs(leftAmount);
+    float z = fabs(turnAmount);
+
+    // see if the point we are given is already inside the allowed walk params volume
+    if (evaluateWalkVolume(x, y, z) > 1.0) {
+        float scale = 0.5;
+        float high = 1.0;
+        float low = 0.0;
+
+        // This is basically a binary search to find the point on the surface.
+        for (unsigned i = 0; i < 10; i++) {
+            x = fabs(forwardAmount) * scale;
+            y = fabs(leftAmount) * scale;
+            z = fabs(turnAmount) * scale;
+
+            if (evaluateWalkVolume(x, y, z) > 1.0) {
+                float newScale = (scale + low) / 2.0;
+                high = scale;
+                scale = newScale;
+            } else {
+                float newScale = (scale + high) / 2.0;
+                low = scale;
+                scale = newScale;
+            }
+        }
+
+        forwardAmount *= scale;
+        leftAmount *= scale;
+        turnAmount *= scale;
+    }
+
+    forward = M_FORWARD * forwardAmount;
+    left = M_LEFT * leftAmount;
+    turn = M_TURN * turnAmount;
+    float volume = evaluateWalkVolume(x, y, z);
+    return volume;
+}
+
+// x = forward, y = left, z = turn
+float evaluateWalkVolume(float x, float y, float z) {
+    return sqrt(x * x + y * y + z * z);
+}
+
+
+
 float Walk::parabolicReturn(float f) { //normalised [0,1] up and down
     double x = 0;
     double y = 0;
@@ -251,4 +315,215 @@ float Walk::interpolateSmooth(float start, float end, float tCurrent, float tEnd
 
 float Walk::squareSmooth(float start, float end, float tCurrent, float tEnd) {
     return ((end - start)/(tEnd * tEnd)) * ((tCurrent * tCurrent)) + start;
+}
+
+XYZ_Coord Walk::mf2b(float Hyp, float Hp, float Hr, float Kp, float Ap, float Ar, float xf, float yf, float zf) {
+    // MFOOT2BODY Transform coords from foot to body.
+    // This code originates from 2010 using symbolic equations in Matlab to perform the coordinate transforms - see team report (BH)
+    // In future this approach to IK for the Nao should be reworked in closed form, significantly reducing the size of the code the
+    // the computational complexity (BH)
+    XYZ_Coord result;
+    float pi = M_PI;
+    float tibia = this->tibia * 1000;
+    float thigh = this->thigh * 1000;
+    float k = sqrt(2.0);
+    float c1 = cos(Ap);
+    float c2 = cos(Hr + pi / 4.0);
+    float c3 = cos(Hyp - pi / 2.0);
+    float c4 = cos(Hp);
+    float c5 = cos(Kp);
+    float c6 = cos(Ar - pi / 2.0);
+    float s1 = sin(Kp);
+    float s2 = sin(Hp);
+    float s3 = sin(Hyp - 1.0 / 2.0 * pi);
+    float s4 = sin(Hr + 1.0 / 4.0 * pi);
+    float s5 = sin(Ap);
+    float s6 = sin(Ar - 1.0 / 2.0 * pi);
+    result.x = thigh * (s2 * s3 - c2 * c3 * c4) + tibia * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4))
+            - yf
+                    * (c6 * (c1 * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4)) - s5 * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2)))
+                            + c3 * s4 * s6)
+            + zf
+                    * (s6 * (c1 * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4)) - s5 * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2)))
+                            - c3 * c6 * s4)
+            + xf * (c1 * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2)) + s5 * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4)));
+    result.y = xf
+            * (c1 * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f) + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f))
+                    + s5
+                            * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)
+                                    - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)))
+            + tibia * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f) - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f))
+            + thigh * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)
+            - yf
+                    * (s6 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f)
+                            + c6
+                                    * (c1
+                                            * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)
+                                                    - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f))
+                                            - s5
+                                                    * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)
+                                                            + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f))))
+            - zf
+                    * (c6 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f)
+                            - s6
+                                    * (c1
+                                            * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)
+                                                    - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f))
+                                            - s5
+                                                    * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)
+                                                            + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f))));
+    result.z = yf
+            * (s6 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f)
+                    + c6
+                            * (c1
+                                    * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+                                            - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f))
+                                    - s5
+                                            * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+                                                    + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f))))
+            - tibia * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f) - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f))
+            - thigh * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+            - xf
+                    * (c1
+                            * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+                                    + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f))
+                            + s5
+                                    * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+                                            - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)))
+            + zf
+                    * (c6 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f)
+                            - s6
+                                    * (c1
+                                            * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+                                                    - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f))
+                                            - s5
+                                                    * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+                                                            + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f))));
+    return result;
+}
+
+Walk::Hpr Walk::hipAngles(float Hyp, float Hp, float Hr, float Kp, float Ap, float Ar, float xf, float yf, float zf, XYZ_Coord e) {
+    // Code from 2010 to perform interative Inverse Kinematics.
+    // Symbolic equations generated in Matlab - see 2010 team report for details and reference
+    Hpr result;
+    float pi = M_PI;
+    float tibia = this->tibia * 1000;
+    float thigh = this->thigh * 1000;
+    float k = sqrt(2.0);
+    float c1 = cos(Ap);
+    float c2 = cos(Hr + pi / 4.0);
+    float c3 = cos(Hyp - pi / 2.0);
+    float c4 = cos(Hp);
+    float c5 = cos(Kp);
+    float c6 = cos(Ar - pi / 2.0);
+    float s1 = sin(Kp);
+    float s2 = sin(Hp);
+    float s3 = sin(Hyp - 1.0 / 2.0 * pi);
+    float s4 = sin(Hr + 1.0 / 4.0 * pi);
+    float s5 = sin(Ap);
+    float s6 = sin(Ar - 1.0 / 2.0 * pi);
+    float j11 = thigh * (c4 * s3 + c2 * c3 * s2) - tibia * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2))
+            + xf * (c1 * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4)) - s5 * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2)))
+            + c6 * yf * (c1 * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2)) + s5 * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4)))
+            - s6 * zf * (c1 * (s1 * (s2 * s3 - c2 * c3 * c4) - c5 * (c4 * s3 + c2 * c3 * s2)) + s5 * (s1 * (c4 * s3 + c2 * c3 * s2) + c5 * (s2 * s3 - c2 * c3 * c4)));
+    float j12 = yf * (c6 * (c1 * (c3 * s1 * s2 * s4 - c3 * c4 * c5 * s4) + s5 * (c3 * c4 * s1 * s4 + c3 * c5 * s2 * s4)) - c2 * c3 * s6)
+            - tibia * (c3 * s1 * s2 * s4 - c3 * c4 * c5 * s4)
+            - zf * (s6 * (c1 * (c3 * s1 * s2 * s4 - c3 * c4 * c5 * s4) + s5 * (c3 * c4 * s1 * s4 + c3 * c5 * s2 * s4)) + c2 * c3 * c6)
+            + xf * (c1 * (c3 * c4 * s1 * s4 + c3 * c5 * s2 * s4) - s5 * (c3 * s1 * s2 * s4 - c3 * c4 * c5 * s4)) + c3 * c4 * s4 * thigh;
+    float j21 = xf
+            * (c1 * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f) - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f))
+                    - s5
+                            * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)
+                                    + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)))
+            - tibia * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f) + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f))
+            - thigh * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)
+            + c6 * yf
+                    * (c1
+                            * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)
+                                    + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f))
+                            + s5
+                                    * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)
+                                            - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)))
+            - s6 * zf
+                    * (c1
+                            * (c5 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)
+                                    + s1 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f))
+                            + s5
+                                    * (c5 * (c4 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) + (c3 * k * s2) / 2.0f)
+                                            - s1 * (s2 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f) - (c3 * c4 * k) / 2.0f)));
+    float j22 = tibia * (c4 * c5 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f))
+            + xf
+                    * (c1 * (c4 * s1 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) + c5 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f))
+                            + s5 * (c4 * c5 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f)))
+            + yf
+                    * (s6 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f)
+                            - c6
+                                    * (c1 * (c4 * c5 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f))
+                                            - s5 * (c4 * s1 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) + c5 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f))))
+            + zf
+                    * (c6 * ((k * s4) / 2.0f + (c2 * k * s3) / 2.0f)
+                            + s6
+                                    * (c1 * (c4 * c5 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f))
+                                            - s5 * (c4 * s1 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f) + c5 * s2 * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f))))
+            + c4 * thigh * ((c2 * k) / 2.0f - (k * s3 * s4) / 2.0f);
+    float j31 = tibia * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f) + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f))
+            - xf
+                    * (c1
+                            * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+                                    - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f))
+                            - s5
+                                    * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+                                            + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)))
+            + thigh * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+            - c6 * yf
+                    * (c1
+                            * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+                                    + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f))
+                            + s5
+                                    * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+                                            - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)))
+            + s6 * zf
+                    * (c1
+                            * (c5 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)
+                                    + s1 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f))
+                            + s5
+                                    * (c5 * (c4 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) - (c3 * k * s2) / 2.0f)
+                                            - s1 * (s2 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f) + (c3 * c4 * k) / 2.0f)));
+    float j32 = -tibia * (c4 * c5 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f))
+            - xf
+                    * (c1 * (c4 * s1 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) + c5 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f))
+                            + s5 * (c4 * c5 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f)))
+            - yf
+                    * (s6 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f)
+                            - c6
+                                    * (c1 * (c4 * c5 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f))
+                                            - s5 * (c4 * s1 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) + c5 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f))))
+            - zf
+                    * (c6 * ((k * s4) / 2.0f - (c2 * k * s3) / 2.0f)
+                            + s6
+                                    * (c1 * (c4 * c5 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) - s1 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f))
+                                            - s5 * (c4 * s1 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f) + c5 * s2 * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f))))
+            - c4 * thigh * ((c2 * k) / 2.0f + (k * s3 * s4) / 2.0f);
+    float xbe = e.x;
+    float ybe = e.y;
+    float zbe = e.z;
+    float lambda = 0.4f;
+    float la2 = lambda * lambda;
+    float la4 = la2 * la2;
+    float j322 = j32 * j32;
+    float j222 = j22 * j22;
+    float j122 = j12 * j12;
+    float j212 = j21 * j21;
+    float j112 = j11 * j11;
+    float j312 = j31 * j31;
+    float sigma = 1.0f
+            / (la4 + j112 * j222 + j122 * j212 + j112 * j322 + j122 * j312 + j212 * j322 + j222 * j312 + j112 * la2 + j122 * la2 + j212 * la2 + j222 * la2 + j312 * la2 + j322 * la2
+                    - 2.0f * j11 * j12 * j21 * j22 - 2.0f * j11 * j12 * j31 * j32 - 2.0f * j21 * j22 * j31 * j32);
+    result.Hp = sigma * xbe * (j11 * j222 + j11 * j322 + j11 * la2 - j12 * j21 * j22 - j12 * j31 * j32)
+            + sigma * ybe * (j122 * j21 + j21 * j322 + j21 * la2 - j11 * j12 * j22 - j22 * j31 * j32)
+            + sigma * zbe * (j122 * j31 + j222 * j31 + j31 * la2 - j11 * j12 * j32 - j21 * j22 * j32);
+    result.Hr = sigma * xbe * (j12 * j212 + j12 * j312 + j12 * la2 - j11 * j21 * j22 - j11 * j31 * j32)
+            + sigma * ybe * (j112 * j22 + j22 * j312 + j22 * la2 - j11 * j12 * j21 - j21 * j31 * j32)
+            + sigma * zbe * (j112 * j32 + j212 * j32 + j32 * la2 - j11 * j12 * j31 - j21 * j22 * j31);
+    return result;
 }

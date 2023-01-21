@@ -5,7 +5,7 @@
 #include <cmath>
 #include <string>
 //#include <utils/matrix_helpers.hpp>
-#include "utils/angles.hpp"
+#include "walk/angles.hpp"
 
 
 namespace V6Joints {
