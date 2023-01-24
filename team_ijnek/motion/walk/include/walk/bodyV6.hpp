@@ -5,10 +5,10 @@
 #include <cmath>
 #include <string>
 //#include <utils/matrix_helpers.hpp>
-#include "walk/angles.hpp"
+#include "angles.hpp"
 
 
-namespace V6Joints {
+namespace Joints {
    // Codes for each joint as used by NaoQi
    typedef enum JointCodesEnum {
       HeadYaw = 0,
@@ -469,7 +469,7 @@ namespace V6LEDs {
    };
 };
 
-namespace V6Sensors {
+namespace Sensors {
 
    /**
     * foot FSR positions relative to ankle frame

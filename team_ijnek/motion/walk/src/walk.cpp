@@ -30,7 +30,10 @@
 #include "walk/bodyV6.hpp"
 #include "walk/MotionDefs.hpp"
 #include "walk/XYZ_Coord.hpp"
-
+#include "walk/ActionCommand.hpp"
+#include "walk/BodyModel.hpp"
+#include "walk/Sensors.hpp"
+#include "walk/JointValues.hpp"
 
 #define KICK_STEP_HEIGHT 0.065  // how far to lift kicking foot
 
@@ -80,17 +83,7 @@ const float z = 0;
 
 float evaluateWalkVolume(float x, float y, float z);
 
-
-Walk::Walk(
-  std::function<void(void)> notifyWalkDone,
-  std::function<void(biped_interfaces::msg::SolePoses)> sendSolePoses,
-  rclcpp::Node* walkNode)
-: notifyWalkDone(notifyWalkDone), sendSolePoses(sendSolePoses), walkNode(walkNode), t(0.0f), weightHasShifted(false)
-{
-  
-}
-
-void Walk::start(walk_msg::msg::Walk walk_command)
+void Walk::start()
 {
   
   dt = MOTION_DT;
@@ -167,9 +160,775 @@ void Walk::start(walk_msg::msg::Walk walk_command)
 
 }
 
-void Walk::notifyJoints(walk_sensor_msg::msg::Sensor sensor_readings)
+JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues &sensors, const BodyModel &bodeyModel)
 {
-  
+  // 0. The very first time walk is called, the previous stand height could have been anything, so make sure we interpolate from that
+    if (walk2014Option == NONE) {
+        // Calculate the current hip height by checking how bent the knee is
+        hiph = sensors.joints.angles[Joints::LKneePitch] / KNEE_PITCH_RANGE * (WALK_HIP_HEIGHT - STAND_HIP_HEIGHT) + STAND_HIP_HEIGHT;
+    }
+
+    // 1. Read in new walk values (forward, left, turn, power) only at the start of a walk step cycle, ie when t = 0
+    if (t == 0) {
+        if (shouldEmergencyStep)
+        {
+            // Try and move sideways to free ourselves when we're stuck on a goal post or another robot
+            forward = 0;
+            left = 300;
+            turn = 0;
+            power = 1;
+        }
+        else
+        {
+            active = command;
+            forward = (float) active.forward / MM_PER_M;    // in meters
+            left = (float) active.left / MM_PER_M;       // in meters
+            turn = active.turn;                       // in radians
+            power = active.power;                     // controls stiffness when standing and kicking when walking*
+            bend = active.bend;                       // knee-bend parameter
+            speed = active.speed;                     // controls speed of walk, distinguishes Jab kick
+        //     foot = active.foot;                       // kicking foot
+        //     useShuffle = active.useShuffle;
+            if (stopping) {                                   // not used at present
+            } else {
+                stopped = false;                                  // (re)activate
+            }
+
+            if (forward == 0 and left == 0 and turn == 0 and power == 0)
+                bend = 0;
+
+            // limit the speed of walk when overheating, can be commented out for serious games
+//            for (int i = 0; i < Joints::NUMBER_OF_JOINTS; ++i) {
+//                float temp = sensors.joints.temperatures[i];
+//                if (temp > 70)
+//                    speed = min(0.5f, speed);
+//                if (temp > 75)
+//                    speed = 0;
+//            }
+        }
+
+        // Stabilise for a bit of time after a block by walking on the spot
+        if (active.blocking)
+        {
+            if (timerSinceLastBlock < 0.8)
+            {
+                // Should stabilise after a block
+                active.blocking = false;
+                forward = 0;
+                left = 0;
+                turn = 0;
+            } else {
+                // perform a block
+                timerSinceLastBlock = 0;
+            }
+        }
+
+        // Scale back values to try to ensure stability.
+        if (!active.blocking && !exactStepsRequested) {
+            currentVolume = ellipsoidClampWalk(forward, left, turn, speed);
+        }
+
+        // Restrict turn change when forwards is greater than MAX_FORWARD_TURN_CHANGE_SLOW
+        if (forward > MAX_FORWARD_TURN_CHANGE_SLOW) {
+            currentTurnChange = TURN_CHANGE_SLOW;
+        } else {
+            currentTurnChange = TURN_CHANGE;
+        }
+
+        float f = forward * MM_PER_M;
+        float l = left * MM_PER_M;
+        forward = f / MM_PER_M;
+        left = l / MM_PER_M;
+
+        // Modify T when sidestepping
+        if (active.blocking)
+            T = BASE_WALK_PERIOD;
+        else
+            T = BASE_WALK_PERIOD + 0.05 * abs(left) / MAX_LEFT;
+
+        // If we're either walking, or ready to walk, and we have a non zero reqeust, then rachet
+        if ((walk2014Option == WALK || walk2014Option == READY) && !(forward == 0 && left == 0 && turn == 0))
+            {
+            // ratchet forward by FORWARD_CHANGE
+            if (!exactStepsRequested && !active.blocking) {
+                if (abs(forward - lastForward) > FORWARD_CHANGE) {
+                    forward = lastForward + (forward - lastForward) / abs(forward - lastForward) * FORWARD_CHANGE;
+                }
+                if (abs(left - lastLeft) > LEFT_CHANGE) {
+                    left = lastLeft + (left - lastLeft) / abs(left - lastLeft) * LEFT_CHANGE;
+                }
+                if (abs(turn - lastTurn) > currentTurnChange) {
+                    turn = lastTurn + (turn - lastTurn) / abs(turn - lastTurn) * currentTurnChange;
+                }
+            }
+        }
+        else
+        {
+            // set forward, left and turn to 0 if we're not walking. ensure feet
+            /// are actually together, before crouching, by checking the LHipRoll
+            // joitns.
+            if (abs(sensors.joints.angles[Joints::LHipRoll]) > DEG2RAD(1.0)||
+                abs(sensors.joints.angles[Joints::RHipRoll]) > DEG2RAD(1.0))
+            {
+                // make sure feet are back together, by walking on the spot
+                forward = 0.01;
+                left = 0;
+                turn = 0;
+            }
+            else
+            {
+                forward = 0;
+                left = 0;
+                turn = 0;
+            }
+        }
+
+        // If we've detected a big gyroscopeZ, slow down! This was added for the longer
+        // carpet in sydney and prevents falling over by not keep walking
+        if (abs(turn) < 0.001)
+        {
+            if (abs(sensors.sensors[Sensors::InertialSensor_GyroscopeZ]) > 0.9)
+            {
+                forward /= 3;
+            }
+        }
+
+        lastForward = forward; // back up old value in m/s
+        lastLeft = left; // used to detect when the left walk parameter changes sign
+        lastTurn = turn;
+
+        // 1.6 Walk Calibration
+        // The definition of forward, left and turn is the actual distance/angle traveled in one second
+        // One walk-cycle consists of two Phases, a left phase (left swing foot) and a right phase (right swing foot)
+
+        if (!exactStepsRequested) {
+            forward *= T; // theoretical calibration, how much to move each foot per step
+            left *= T;
+            turn *= T;
+            // linear calibration to achieve actual performance ie turn in action command achieves turn/sec in radians on the robot
+            forward *= 1.0;
+            left *= 0.82;
+            turn *= 0.78;
+        }
+        turn *= -1;   // reverses sign
+    }
+
+    // 2. Update timer
+    t += dt;
+    globalTime += dt;
+    lastKickTime += dt;
+    timerSinceLastBlock += dt;
+
+    // 3. Determine Walk2014 Option
+//     if (active.actionType == ActionCommand::KICK && request->body.actionType != ActionCommand::Body::KICK) {
+//         if (canAbortKickBeforeLean())
+//         {
+//             kickT = backPhase + kickPhase + throughPhase + endPhase + shiftEndPeriod / 4;
+//         }
+//         else if (canAbortKick())
+//         {
+//             // Finish transition out if in the middle of a kick by skipping to the end phase
+//             kickT = backPhase + kickPhase + throughPhase;
+//         }
+//     } else if (active.actionType == ActionCommand::Body::KICK) {
+//         // This makes sure that the action type gets set back to walk just after a kick is finished.
+//         // If we don't leave enough time for this to happen, motion moves back into a kick before behaviour
+//         // can change its mind.
+//         if (lastKickTime < 4 * T) {
+//             request->body.actionType = ActionCommand::Body::WALK;
+//         } else if (abs(hiph - WALK_HIP_HEIGHT) < .0001) { // make sure we retain the designated walking height
+//             if (walk2014Option == WALK) {
+//                 // make sure walk is in neutral stance before kicking, L is symmetrical to R
+//                 if (fabs(forwardL) < EPSILON && fabs(leftL) < EPSILON && fabs(turnRL) < TURN_EPSILON && t == dt) {
+//                     // Assuming already at t = 0 from active getting set to kick
+//                     // Any new settings the first time walk2014Option==KICK go here
+
+//                     prepKick(active.foot == ActionCommand::Body::LEFT, bodyModel);
+//                 }
+//             } else if (walk2014Option != KICK) {
+//                 prepKick(active.foot == ActionCommand::Body::LEFT, bodyModel);
+//             }
+//         } else {                                      // hiph not= walkHipHeight
+//             if (walk2014Option != CROUCH) { // robot starts crouching to walking height
+//                 hiph0 = hiph;
+//                 timer = 0;
+//             }
+//             walk2014Option = CROUCH;                       // continue crouching
+//         }
+
+//     } // end Kick test
+    if (walk2014Option == WALK and walkState != NOT_WALKING) { // we are in the process of walking
+        if (forward == 0 and left == 0 and turn == 0) { // request to stop walking
+            walkState = STOPPING;
+        }
+    } else if (bend == 0) { // if we are not walking and wish to stand and power off
+        if (abs(hiph - STAND_HIP_HEIGHT) < .0001) { // and robot has reached stand height
+            walk2014Option = STAND;                       // (keep) standing
+        } else {                                  // if hiph not= standHipHeight
+            if (walk2014Option != STANDUP) {
+                hiph0 = hiph;
+                timer = 0;
+            }
+            walk2014Option = STANDUP;                     // stand up first
+        }
+    } else if (forward == 0 and left == 0 and turn == 0 and bend == 1) { // not walking, but ready to go again, ie don't stand up
+        if (abs(hiph - WALK_HIP_HEIGHT) < .0001) {
+            walk2014Option = READY;
+        } else {
+            if (walk2014Option != CROUCH) { // robot starts crouching to walking height
+                hiph0 = hiph;
+                timer = 0;
+            }
+            walk2014Option = CROUCH;                       // continue crouching
+        }
+    } else {                             // if some walk parameters are non-zero
+        if (abs(hiph - WALK_HIP_HEIGHT) < .0001) { // and we are at the designated walking height
+            if (walk2014Option != WALK) {
+                // Any new settings the first time walk2014Option==WALK go here (just for testing the walk)
+                nextFootSwitchT = T;
+
+                if (active.blocking)
+                {
+                    walkState = WALKING;
+                    // Start walking with the foot in the direction we want to go to, if we're blocking
+                    bodyModel.setIsLeftPhase(left > 0);
+                } else {
+                    walkState = STARTING;
+                    // Start walking with the foot that's not in the direction we want to go to.
+                    // Since the first step the robot takes  is a "STARTING" step, it can only take a side
+                    // step from the second step onwards.
+                    bodyModel.setIsLeftPhase(left < 0);
+                }
+            }
+            walk2014Option = WALK;                          // (keep) walking
+        } else {                                      // hiph not= walkHipHeight
+            if (walk2014Option != CROUCH) { // robot starts crouching to walking height
+                hiph0 = hiph;
+                timer = 0;
+            }
+            walk2014Option = CROUCH;                       // continue crouching
+        }
+    }
+
+    // 4. Execute Walk2014 Option
+    if (walk2014Option == STAND) { // Place CoM over ankle and turn set power to motors
+        hiph = STAND_HIP_HEIGHT;
+        forward = left = turn = 0;
+        t = nextFootSwitchT = 0;
+        stiffness = power;
+        if (stiffness < 0.2)
+            stiffness = 0.2;
+        comOffset0 = comOffset = 0;
+    } else if (walk2014Option == STANDUP) {
+        hiph = hiph0 + (STAND_HIP_HEIGHT - hiph0) * parabolicStep(timer, CROUCH_STAND_PERIOD, 0);
+        forward = left = turn = 0;
+        comOffset0 = comOffset -= 0.02 * comOffset; // reduce offset to zero to allow stiffness to be turned down
+        stiffness = 1;
+        t = nextFootSwitchT = 0;
+        timer += dt;
+    } else if (walk2014Option == CROUCH) {
+        forward = left = turn = 0;
+        stiffness = 1;
+        hiph = hiph0 + (WALK_HIP_HEIGHT - hiph0) * parabolicStep(timer, CROUCH_STAND_PERIOD, 0);
+        comOffset0 = comOffset = COM_OFFSET_CROUCH * parabolicStep(timer, CROUCH_STAND_PERIOD, 0); // move comOffset to 0.01 meters when walking
+        t = nextFootSwitchT = 0;
+        timer += dt;                                        // inc. option timer
+    } else if (walk2014Option == WALK) {
+        if(!exactStepsRequested){
+            // Set knee and ankle stiffness to 1, (if overheating happens, consider reintroducing variable stiffness through the commened out code below)
+            kneeStiffness = 1;  // kneeStiffness = calculateKneeStiffness(currentVolume);
+            ankleStiffness = 1;  // ankleStiffness = calculateAnkleStiffness(currentVolume);
+        }
+        // If moving forward or backward scale comOffset to a maximum and minimum position
+        if (lastForward == 0) {
+            targetComOffset = COM_OFFSET_CROUCH;
+        } else if (lastForward > 0) {
+            targetComOffset = COM_OFFSET_BACKWARDS + ((abs(lastForward) / MAX_FORWARD) * (COM_OFFSET_FORWARDS - COM_OFFSET_BACKWARDS));
+        } else {
+            targetComOffset = COM_OFFSET_BACKWARDS;
+        }
+        comOffset = comOffset0 + (targetComOffset - comOffset0) * linearStep(t, T);
+        stiffness = 1;
+    } else if (walk2014Option == KICK) {
+        stiffness = 1;
+        forward = left = turn = 0;
+    }
+    if (walk2014Option == READY) {
+        forward = left = turn = 0;
+        stiffness = power;
+        if (stiffness < 0.4)
+            stiffness = 0.4;  // need enough stiffness to keep crouching posture
+        t = nextFootSwitchT = 0;
+        comOffset0 = comOffset;
+    }
+    // 5. Determine walk variables throughout the walk step phase
+    if (walk2014Option == WALK and nextFootSwitchT > 0) {
+        // 5.1 Calculate the height to lift each swing foot
+        float maxFootHeight = BASE_LEG_LIFT + abs(forward) * 0.01 + abs(left) * 0.03;
+        if (useShuffle){
+            maxFootHeight *= 0.7;  // lower step height when shuffling (ie. close to obstacles)
+        }
+        float varfootHeight = maxFootHeight * parabolicReturnMod(t / nextFootSwitchT); // 0.012 lift of swing foot from ground
+        // 5.2 When walking in an arc, the outside foot needs to travel further than the inside one - void
+        // 5.3L Calculate intra-walkphase forward, left and turn at time-step dt, for left swing foot
+        if (bodyModel.isLeftPhase) {             // if the support foot is right
+            if (weightHasShifted) {
+                // 5.3.1L forward (the / by 2 is because the CoM moves as well and forwardL is wrt the CoM
+                forwardR = forwardR0 + ((forward) / 2 - forwardR0) * linearStep(t, nextFootSwitchT);
+                forwardL = forwardL0 + parabolicStep(t, nextFootSwitchT, 0) * (-(forward) / 2 - forwardL0); // swing-foot follow-through
+                // 5.3.2L Jab kick with left foot - removed
+                // 5.3.3L Determine how much to lean from side to side - removed
+                // 5.3.4L left
+                if (left > 0) {
+                    leftL = left * parabolicStep(t, nextFootSwitchT, 0.2);
+                    // if changing direction of left command, cancel lastStepLeft out of next left step
+                    if (lastLeft * left < 0) {
+                        leftL += lastStepLeft * (1 - parabolicStep(t, nextFootSwitchT, 0.0));
+                    }
+                    leftR = -leftL;
+                } else {
+                    leftL = lastStepLeft * (1 - parabolicStep(t, nextFootSwitchT, 0.0));
+                    leftR = -leftL;
+                }
+                // 5.3.5L turn (note, we achieve correct turn by splitting turn foot placement unevely over two steps, but 1.6 + 0.4 = 2 and adds up to two steps worth of turn)
+                if (turn < 0)
+                    turnRL = turnRL0 + (-1.6 * turn - turnRL0) * parabolicStep(t, nextFootSwitchT, 0.0);
+                else
+                    turnRL = turnRL0 + (-0.4 * turn - turnRL0) * parabolicStep(t, nextFootSwitchT, 0.0); //turn back to restore previous turn angle
+            }
+            // 5.3.6L determine how high to lift the swing foot off the ground
+            foothL = varfootHeight;                      // lift left swing foot
+            foothR = 0;                             // do not lift support foot;
+        }
+        // 5.3R Calculate intra-walkphase forward, left and turn at time-step dt, for right swing foot
+        if (not bodyModel.isLeftPhase) {          // if the support foot is left
+            if (weightHasShifted) {
+                // 5.3.1R forward
+                forwardL = forwardL0 + ((forward) / 2 - forwardL0) * linearStep(t, nextFootSwitchT);
+                forwardR = forwardR0 + parabolicStep(t, nextFootSwitchT, 0) * (-(forward) / 2 - forwardR0); // swing-foot follow-through
+                // 5.3.2R Jab-Kick with right foot - removed
+                // 5.3.3R lean - not used
+                // 5.3.4R left
+                if (left < 0) {
+                    leftR = left * parabolicStep(t, nextFootSwitchT, 0.2);
+                    // if changing direction of left command, cancel lastStepLeft out of next left step
+                    if (lastLeft * left < 0) {
+                        leftR += lastStepLeft * (1 - parabolicStep(t, nextFootSwitchT, 0.0));
+                    }
+                    leftL = -leftR;
+                } else {
+                    leftR = lastStepLeft * (1 - parabolicStep(t, nextFootSwitchT, 0.0));
+                    leftL = -leftR;
+                }
+                // 5.3.5R turn
+                if (turn < 0)
+                    turnRL = turnRL0 + (0.4 * turn - turnRL0) * parabolicStep(t, nextFootSwitchT, 0.0); //turn back to restore previous turn angle
+                else
+                    turnRL = turnRL0 + (1.6 * turn - turnRL0) * parabolicStep(t, nextFootSwitchT, 0.0);
+                // 5.3.6R Foot height
+            }
+            foothR = varfootHeight;
+            foothL = 0;
+        }
+        // 5.4 Special conditions when priming the walk
+        if (walkState == STARTING) {
+            turnRL = 0; // don't turn on start of rocking - may relax this in future
+            foothL /= 3.5; // reduce max lift due to short duration - may need to adjust this later
+            foothR /= 3.5;                                  // "
+            leftR = leftL = 0; // don't try to step left on starting and stopping
+            forwardL = forwardR = 0;           // don't move forward or backward
+            lastForward = 0.0;
+            lastLeft = 0.0;
+            lastTurn = 0.0;
+        }
+        // 5.5 "natural" arm swing while walking/kicking to counterbalance foot swing
+        shoulderPitchR = -forwardR * 6; //10;                     // forwardR is in meters, 10 is an arbitrary scale factor to match previous walk
+        shoulderPitchL = -forwardL * 6;                        //10;
+    } 
+//     else if (walk2014Option == KICK) { // Kicking
+
+//         ballX = clamp(160, ballX, 250);
+
+//        float kickHeight = KICK_STEP_HEIGHT;
+
+//        if(ballX > 200) {
+//           kickHeight *= 1.125;
+//        }
+
+//         if (active.foot == ActionCommand::Body::LEFT) {
+//            // Each robot has a slightly different lean angle that works. This is dealt through individual lean offsets.
+//             float kickLeanMod = kickLean + kickLeanOffsetL
+//                   + ((ballY-KICK_MIN_Y_DIST)/(KICK_MAX_Y_DIST-KICK_MIN_Y_DIST))*MAX_EXTRA_LEAN;
+//             ballY = MIN(150, MAX(ballY, 30));
+//             float gyroXOntoSupportFoot = sensors.sensors[InertialSensor_GyroscopeX];
+//             makeForwardKickJoints(kickLeanMod, kickHeight, foothL, forwardL, leftL, kneePitchL, shoulderRollL, anklePitchL, ballX, ballY, request, sensors, gyroXOntoSupportFoot, motionDebugInfo);
+//         } else { // with added adjustments for right side
+//             float kickLeanMod = -1*(kickLean + kickLeanOffsetR +
+//                   ((ballY+KICK_MIN_Y_DIST)/(-KICK_MAX_Y_DIST+KICK_MIN_Y_DIST))*MAX_EXTRA_LEAN);
+//             ballY = MAX(-150, MIN(ballY, -30));
+//             ballY *= -1;
+//             float gyroXOntoSupportFoot = -sensors.sensors[InertialSensor_GyroscopeX];
+//             makeForwardKickJoints(kickLeanMod, kickHeight, foothR, forwardR, leftR, kneePitchR, shoulderRollR, anklePitchR, ballX, ballY, request, sensors, gyroXOntoSupportFoot, motionDebugInfo);
+//             leftR *= -1;
+//         }
+//     } 
+    else { // When walk option is not WALK or KICK
+        foothL = foothR = 0;
+    }
+
+    // 6. Changing Support Foot. Note bodyModel.isLeftPhase means left foot is swing foot.
+    //    t>0.75*T tries to avoid bounce, especially when side-stepping
+    //    lastZMPL*ZMPL<0.0 indicates that support foot has changed
+    //    t>3*T tries to get out of "stuck" situations
+
+    if (t > 0.50 * T and bodyModel.ZMPL * bodyModel.lastZMPL < 0 and walk2014Option == WALK)
+    {
+        supportFoothasChanged = true;
+        shouldEmergencyStep = false; // we don't have to do an emergency step any more once we detect this condition
+    }
+    if (lastKickTime == 0)
+    {
+        // If we just finished the kick, change supportFoot so we start walking
+        supportFoothasChanged = true;
+    }
+    if (supportFoothasChanged) {
+        weightHasShifted = (bodyModel.isLeftPhase != (bodyModel.ZMPL < 0));
+        bodyModel.setIsLeftPhase(bodyModel.ZMPL < 0); // set isLeft phase in body model for kinematics etc
+    }
+    if (t > 3 * T && walk2014Option != KICK && lastKickTime > 3.0)
+    {
+        // Trick the walk gneerator into thinking that we've finished the step, so we can
+        // get unstuck when we've walked into a post or another robot
+        supportFoothasChanged = true;
+        weightHasShifted = true;
+        bodyModel.setIsLeftPhase(!bodyModel.isLeftPhase);
+        shouldEmergencyStep = true;
+    }
+    if (supportFoothasChanged and walk2014Option == WALK) {
+        supportFoothasChanged = false;                      //reset
+        // 6.1 Recover previous "left" swing angle -> changed to leftL and leftR
+        if (bodyModel.isLeftPhase)
+            lastStepLeft = leftL;
+        else
+            lastStepLeft = leftR;
+        // 6.2 Decide on timing of next walk step phase
+        if (walkState == NOT_WALKING) {                       // Start the walk
+            nextFootSwitchT = T;
+            if (active.blocking)
+                walkState = WALKING; // we go straight to WALKING walkState (needed for blocking moving balls)
+            else
+                walkState = STARTING;
+        } else if (walkState == STARTING) {
+            nextFootSwitchT = T;
+            walkState = WALKING;
+        } else if (walkState == WALKING) {
+            nextFootSwitchT = T;
+            walkState = WALKING; // continue walking until interrupted by a command to stop (or kick)
+        } else if (walkState == STOPPING) {
+            nextFootSwitchT = T;
+            walkState = NOT_WALKING;
+        } else
+            llog(FATAL) << "Should never get here: walkState error" << endl;
+        // 6.3 reset step phase time
+        t = 0;                                         // reset step phase timer
+        // 6.4 backup values
+        turnRL0 = turnRL;               // store turn value for use in next step
+        forwardR0 = forwardR;                             // sagittal right foot
+        forwardL0 = forwardL;                              // sagittal left foot
+        comOffset0 = comOffset;
+        // 6.5 Other stuff on support foot change - none at the moment
+    } // end of changing support foot
+
+    // If we're in crouch, we want to be ready to pounce!
+    if (walk2014Option == READY)
+    {
+        t = 0;
+    }
+
+    // 7. Sagittal Balance
+
+    // PD Controller tuned using the Ziegler-Nichols method
+    filteredGyroY = 0.8 * filteredGyroY + 0.2 * sensors.sensors[InertialSensor_GyroscopeY];
+    // Calculate total output
+    //    Control output     =    Kp   x     error     +    Kd   x (          deltaError          / dt)
+    sagittalBalanceAdjustment =  KpGyro * filteredGyroY + (KdGyro * (filteredGyroY - preErrorGyro) / dt);
+
+    // Save current error to be next previous error
+    preErrorGyro = filteredGyroY;
+
+    // PID Controller hand tuned by inspection
+    filteredAngleY = 0.8 * filteredAngleY + 0.2 * sensors.sensors[InertialSensor_AngleY];
+
+    // Calculate error only outside angle thresholds
+    if (filteredAngleY > 0.06) {
+        angleError = 0.06 - filteredAngleY;
+    }
+    else if (filteredAngleY < -0.09) {
+        angleError = -0.09 - filteredAngleY;
+    }
+    // Otherwise clear the error and error sum
+    else {
+        angleErrorSum = 0;
+        angleError = 0;
+    }
+
+    // Add the error to the error sum
+    angleErrorSum += angleError * dt;
+
+    // Calculate total output (negated to adjust hip angle correctally)
+    //     Control output       =   Kp    x     error  +    Ki   x    errorSum   + (  Kd   *  (          deltaError          / dt)
+    sagittalHipBalanceAdjustment = -(KpAngle * angleError + KiAngle * angleErrorSum + (KdAngle * (angleError - preErrorAngle) / dt));
+
+    //Save error to previous error
+    preErrorAngle = angleError;
+
+    if (walk2014Option == READY) {
+        sagittalBalanceAdjustment = 0;        // to stop swaying while not walking
+    }
+
+    // 7.5 Coronal Balance
+    filteredGyroX = 0.8 * filteredGyroX + 0.2 * sensors.sensors[InertialSensor_GyroscopeX];
+    if (walk2014Option == KICK) {
+        coronalBalanceAdjustment = filteredGyroX / 4.5; // adjust ankle roll in proportion to filtered gryoX aggressively during kick
+    } else {
+        coronalBalanceAdjustment = 0;
+    }
+
+    // 8. Odometry update for localisation
+    *odometry = *odometry + motionOdometry.updateOdometry(sensors, updateOdometry(bodyModel.isLeftPhase));
+
+    // 9. Work out joint angles from walk variables above
+
+    // 9.05 Sert hip and ankle values
+    float HrL = atan(leftL / (hiph - ankle));
+    float HrR = atan(leftR / (hiph - ankle));
+    float ArL = -HrL;
+    float ArR = -HrR;
+
+    // 9.1 Left foot closed form inverse kinematics
+    float leghL = hiph - foothL - ankle; // vertical height between ankle and hip in meters
+    float legX0L = leghL / cos(HrL); // leg extension (eliminating knee) when forwardL = 0
+    float legXL = sqrt(legX0L * legX0L + (forwardL + comOffset) * (forwardL + comOffset)); //leg extension at forwardL
+    if (legXL > thigh + tibia)
+        std::cout << "(Walk2014Generator) cannot solve Inverse Kinematics for that foot position!" << std::endl;
+    float beta1L = acos((thigh * thigh + legXL * legXL - tibia * tibia) / (2.0f * thigh * legXL)); // acute angle at hip in thigh-tibia triangle
+    float beta2L = acos((tibia * tibia + legXL * legXL - thigh * thigh) / (2.0f * tibia * legXL)); // acute angle at ankle in thigh-tibia triangle
+    float tempL = legX0L / legXL;
+    if (tempL > 1.0f)
+        tempL = 1.0f; // sin ratio to calculate leg extension pitch. If > 1 due to numerical error round down.
+    float deltaL = asin(tempL);                           // leg extension angle
+    float dirL = 1.0f;
+    if ((forwardL + comOffset) > 0.0f)
+        dirL = -1.0f; // signum of position of foot
+    float HpL = beta1L + dirL * (M_PI / 2.0f - deltaL); // Hip pitch is sum of leg-extension + hip acute angle above
+    float ApL = beta2L + dirL * (deltaL - M_PI / 2.0f); // Ankle pitch is a similar calculation for the ankle joint
+    float KpL = HpL + ApL; // to keep torso upright with both feet on the ground, the knee pitch is always the sum of the hip pitch and the ankle pitch.
+
+    // 9.2 right foot closed form inverse kinematics (comments as above but for right leg)
+    float leghR = hiph - foothR - ankle;
+    float legX0R = leghR / cos(HrR);
+    float legXR = sqrt(legX0R * legX0R + (forwardR + comOffset) * (forwardR + comOffset));
+    float dirR = 1.0f;
+    if ((forwardR + comOffset) > 0.0f)
+        dirR = -1.0f;
+    if (legXR > thigh + tibia)
+        std::cout << "(Walk2014Generator) cannot solve Inverse Kinematics for that foot position!" << std::endl;
+    float beta1R = acos((thigh * thigh + legXR * legXR - tibia * tibia) / (2.0f * thigh * legXR));
+    float beta2R = acos((tibia * tibia + legXR * legXR - thigh * thigh) / (2.0f * tibia * legXR));
+    float tempR = legX0R / legXR;
+    if (tempR > 1.0f)
+        tempR = 1.0f;
+    float deltaR = asin(tempR);
+    float HpR = beta1R + dirR * (M_PI / 2.0f - deltaR);
+    float ApR = beta2R + dirR * (deltaR - M_PI / 2.0f);
+    float KpR = HpR + ApR;
+
+    // 9.3 Sert hip and ankle values -> Moved to 9.05
+
+    // 9.35 Add kick rocking
+    if (walk2014Option == KICK) {
+        HrL += rock;
+        HrR += rock;
+        ArL -= rock;
+        ArR -= rock;
+    }
+
+    // 9.4 Adjust HpL, HrL, ApL, ArL LEFT based on Hyp turn to keep ankle in situ
+    // Turning
+    XYZ_Coord tL = mf2b(z, -HpL, HrL, KpL, -ApL, ArL, z, z, z);
+    XYZ_Coord sL;
+    float Hyp = -turnRL;
+    for (int i = 0; i < 3; i++) {
+        sL = mf2b(Hyp, -HpL, HrL, KpL, -ApL, ArL, z, z, z);
+        XYZ_Coord e((tL.x - sL.x), (tL.y - sL.y), (tL.z - sL.z));
+        Hpr hpr = hipAngles(Hyp, -HpL, HrL, KpL, -ApL, ArL, z, z, z, e);
+        HpL -= hpr.Hp;
+        HrL += hpr.Hr;
+    }
+    // ApL and ArL to make sure LEFT foot is parallel to ground
+    XYZ_Coord up = mf2b(Hyp, -HpL, HrL, KpL, -ApL, ArL, 1.0f, 0.0f, 0.0f);
+    XYZ_Coord ur = mf2b(Hyp, -HpL, HrL, KpL, -ApL, ArL, 0.0f, 1.0f, 0.0f);
+    ApL = ApL + asin(sL.z - up.z);
+    ArL = ArL + asin(sL.z - ur.z);
+
+    // 9.5 Adjust HpR, HrR, ApR, ArR (RIGHT) based on Hyp turn to keep ankle in situ
+    // Map to LEFT - we reuse the left foot IK because of symmetry right foot
+    float Hr = -HrR;
+    float Ar = -ArR;
+    // Target foot origin in body coords
+    XYZ_Coord t = mf2b(z, -HpR, Hr, KpR, -ApR, Ar, z, z, z);
+    XYZ_Coord s;
+    Hyp = -turnRL;
+    for (int i = 0; i < 3; i++) {
+        s = mf2b(Hyp, -HpR, Hr, KpR, -ApR, Ar, z, z, z);
+        XYZ_Coord e((t.x - s.x), (t.y - s.y), (t.z - s.z));
+        Hpr hpr = hipAngles(Hyp, -HpR, Hr, KpR, -ApR, Ar, z, z, z, e);
+        HpR -= hpr.Hp;
+        Hr += hpr.Hr;
+    }
+    // 9.6 Ap and Ar to make sure foot is parallel to ground
+    XYZ_Coord u1 = mf2b(Hyp, -HpR, Hr, KpR, -ApR, Ar, 1.0f, 0.0f, 0.0f);
+    XYZ_Coord u2 = mf2b(Hyp, -HpR, Hr, KpR, -ApR, Ar, 0.0f, 1.0f, 0.0f);
+    ApR = ApR + asin(s.z - u1.z);
+    Ar = Ar + asin(s.z - u2.z);
+    // map back from left foot to right foot
+    HrR = -Hr;
+    ArR = -Ar;
+
+    // 10. Set joint values and stiffness
+    JointValues j = sensors.joints;
+    for (uint8_t i = 0; i < Joints::NUMBER_OF_JOINTS; ++i)
+        j.stiffnesses[i] = stiffness;
+
+    // Overwrite knee and ankle pitch stiffness to reduce overheating
+    if (walk2014Option == WALK && !exactStepsRequested) {
+        j.stiffnesses[Joints::LKneePitch] = kneeStiffness;
+        j.stiffnesses[Joints::RKneePitch] = kneeStiffness;
+        j.stiffnesses[Joints::LAnklePitch] = ankleStiffness;
+        j.stiffnesses[Joints::RAnklePitch] = ankleStiffness;
+    }
+
+    // 10.1 Arms
+
+    // Lower stiffness as much as possible, to prevent overheating in arms (important for reliable getups)
+    j.stiffnesses[Joints::LShoulderPitch] = 0.3;
+    j.stiffnesses[Joints::LShoulderRoll] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::LElbowYaw] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::LElbowRoll] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::LWristYaw] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::RShoulderPitch] = 0.3;
+    j.stiffnesses[Joints::RShoulderRoll] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::RElbowYaw] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::RElbowRoll] = DEFAULT_ARM_STIFFNESS;
+    j.stiffnesses[Joints::RWristYaw] = DEFAULT_ARM_STIFFNESS;
+
+    j.angles[Joints::LShoulderPitch] = DEG2RAD(90) + shoulderPitchL;
+    j.angles[Joints::LShoulderRoll] = DEG2RAD(7) + shoulderRollL;
+    j.angles[Joints::LElbowRoll] = DEG2RAD(0); //DEG2RAD(-30)+shoulderPitchL;  //swing bent arms
+    j.angles[Joints::LElbowYaw] = DEG2RAD(0);
+    j.angles[Joints::LWristYaw] = DEG2RAD(0);
+    j.angles[Joints::RShoulderPitch] = DEG2RAD(90) + shoulderPitchR;
+    j.angles[Joints::RShoulderRoll] = DEG2RAD(-7) - shoulderRollR;
+    j.angles[Joints::RElbowRoll] = DEG2RAD(0); //DEG2RAD(30)-shoulderPitchR; //swing bent arms
+    j.angles[Joints::RElbowYaw] = DEG2RAD(0);
+    j.angles[Joints::RWristYaw] = DEG2RAD(0);
+
+    // If we're performing emergency step, overwrite the armbehind parameter
+    if (shouldEmergencyStep) {
+        active.leftArmBehind = true;
+        active.rightArmBehind = true;
+    }
+
+    if (active.leftArmBehind)
+    {
+        j.stiffnesses[Joints::LShoulderPitch] = 0.3;
+
+        j.angles[Joints::LShoulderPitch] = DEG2RAD(100);
+        j.angles[Joints::LShoulderRoll] = DEG2RAD(-13);
+        j.angles[Joints::LElbowRoll] = DEG2RAD(-20);
+        j.angles[Joints::LElbowYaw] = DEG2RAD(20);
+    }
+    if (active.rightArmBehind)
+    {
+        j.stiffnesses[Joints::RShoulderPitch] = 0.3;
+
+        j.angles[Joints::RShoulderPitch] = DEG2RAD(100);
+        j.angles[Joints::RShoulderRoll] = DEG2RAD(13);
+        j.angles[Joints::RElbowRoll] = DEG2RAD(20);
+        j.angles[Joints::RElbowYaw] = DEG2RAD(-20);
+    }
+
+    // If we're in emergency step, have higher stiffness for the shoulder joints
+    // because the robot's shoulder is probably stuck on something and we need more stiffness
+    // to achieve the required position
+    if (shouldEmergencyStep) {
+        j.stiffnesses[Joints::LShoulderRoll] = 1.0;
+        j.stiffnesses[Joints::LShoulderPitch] = 1.0;
+        j.stiffnesses[Joints::RShoulderRoll] = 1.0;
+        j.stiffnesses[Joints::RShoulderPitch] = 1.0;
+    }
+
+
+    // 10.2 Turn
+    j.angles[Joints::LHipYawPitch] = -turnRL;
+
+    // 10.3 Sagittal Joints
+    j.angles[Joints::LHipPitch] = -HpL;
+    j.angles[Joints::RHipPitch] = -HpR;
+    j.angles[Joints::LKneePitch] = KpL;
+    j.angles[Joints::RKneePitch] = KpR;
+
+    // Only activate balance control if foot is on the ground
+    j.angles[Joints::LAnklePitch] = -ApL;
+    j.angles[Joints::RAnklePitch] = -ApR;
+    if (walkState != NOT_WALKING and nextFootSwitchT > 0) {
+       if (bodyModel.isLeftPhase) {
+            j.angles[Joints::RAnklePitch] += sagittalBalanceAdjustment;
+            j.angles[Joints::RHipPitch] += sagittalHipBalanceAdjustment;
+        } else {
+            j.angles[Joints::LAnklePitch] += sagittalBalanceAdjustment;
+            j.angles[Joints::LHipPitch] += sagittalHipBalanceAdjustment;
+        }
+    } else if (walk2014Option == KICK) {
+        if (bodyModel.isLeftPhase)
+            j.angles[Joints::RAnklePitch] += sagittalBalanceAdjustment;
+        else
+            j.angles[Joints::LAnklePitch] += sagittalBalanceAdjustment;
+    } else {
+        j.angles[Joints::RAnklePitch] += sagittalBalanceAdjustment;
+        j.angles[Joints::LAnklePitch] += sagittalBalanceAdjustment;
+    }
+
+    // 10.4 Coronal Joints
+    j.angles[Joints::LHipRoll] = HrL;
+    j.angles[Joints::RHipRoll] = HrR;
+    j.angles[Joints::LAnkleRoll] = ArL;
+    j.angles[Joints::RAnkleRoll] = ArR;
+
+    // Add in joint adjustments for kicks
+    if (walk2014Option == KICK) {
+        addKickJoints(j);
+        // Add in some coronal balancing
+        if (bodyModel.isLeftPhase) {
+            j.angles[Joints::RAnkleRoll] += coronalBalanceAdjustment;
+            if(hipBalance == true) {
+                j.angles[Joints::RHipRoll] += coronalBalanceAdjustment / 2;
+            }
+        }
+        else {
+            j.angles[Joints::LAnkleRoll] += coronalBalanceAdjustment;
+            if(hipBalance == true) {
+                j.angles[Joints::LHipRoll] += coronalBalanceAdjustment / 2;
+            }
+        }
+    }
+
+    // Fill out some debug information
+    motionDebugInfo.feetPosition = FeetPosition(
+      MM_PER_M * -forwardL, MM_PER_M * leftL, RAD2DEG(turnRL),
+      MM_PER_M * -forwardR, MM_PER_M * leftR, RAD2DEG(-turnRL));
+
+    return j;
   
 }
 
@@ -234,6 +993,22 @@ float evaluateWalkVolume(float x, float y, float z) {
     return sqrt(x * x + y * y + z * z);
 }
 
+// Stiffness required by the knee to keep stability
+// Equation was found by finding the lowest stiffness that was stable at a continous requested speed
+// Relate each speed to the corresponding volume and curve fit
+float Walk2014Generator::calculateKneeStiffness(float volume) {
+    float stiffness = -0.42 * (volume * volume) + volume + 0.395;
+    stiffness = ceilf(MIN(1,MAX(0.4,stiffness)) * 100) / 100;    // Min and max (2 dp) required stiffness
+    return stiffness;
+}
+// Stiffness required by the ankle to keep stability
+// Equation was found by setting the lowest stiffness that was stable at a continous requested speed
+// Relate each speed to the corresponding volume and curve fit
+float Walk2014Generator::calculateAnkleStiffness(float volume) {
+    float stiffness = -0.32 * (volume * volume) + 0.76 * volume + 0.56;
+    stiffness = ceilf(MIN(1,MAX(0.55,stiffness)) * 100) / 100;    // Min and max (2 dp) required stiffness
+    return stiffness;
+}
 
 
 float Walk::parabolicReturn(float f) { //normalised [0,1] up and down

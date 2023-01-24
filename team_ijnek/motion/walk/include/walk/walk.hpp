@@ -16,23 +16,17 @@
 #define WALK__WALK_HPP_
 
 #include <functional>
-#include "biped_interfaces/msg/sole_poses.hpp"
-#include "nao_sensor_msgs/msg/joint_positions.hpp"
-#include "rclcpp/rclcpp.hpp"
-#include "walk_msg/msg/walk.hpp"
-#include "walk_sensor_msg/msg/sensor.hpp"
 #include "walk/XYZ_Coord.hpp"
+#include "walk/ActionCommand.hpp"
+#include "walk/Sensors.hpp"
 
 
 class Walk
 {
 public:
-  Walk(
-    std::function<void(void)> notifyWalkDone,
-    std::function<void(biped_interfaces::msg::SolePoses)> sendSolePoses,
-    rclcpp::Node* walkNode);
-  void start(walk_msg::msg::Walk walk_command);
-  void notifyJoints(walk_sensor_msg::msg::Sensor sensor_readings);
+  Walk();
+  void start();
+  JointValues notifyJoints(const ActionCommand &command, const SensorValues &sensors, const BodyModel &bodeyModel);
  
 
   enum Walk2014Option {
@@ -59,14 +53,13 @@ public:
 
 
 private:
-  std::function<void(void)> notifyWalkDone;
-  std::function<void(biped_interfaces::msg::SolePoses)> sendSolePoses;
-  rclcpp::Node* walkNode;
 
-  walk_msg::msg::Walk walk_command;
-  walk_sensor_msg::msg::Sensor sensor_readings;
+  // walk_msg::msg::Walk walk_command;
+  // walk_sensor_msg::msg::Sensor sensor_readings;
 
   bool exactStepsRequested;
+
+  ActionCommand active;
 
   // legacy code
   bool stopping;

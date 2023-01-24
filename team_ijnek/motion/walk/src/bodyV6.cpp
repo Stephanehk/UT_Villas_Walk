@@ -3,7 +3,7 @@
 // Calculate Rad/MOTION_DT, so how much the joint can move in frame
 #define CALCULATE_RAD_P_MOTION_DT(rpm, ratio) ((rpm * (2 * M_PI) / 60) * MOTION_DT) / ratio
 
-namespace V6Joints {
+namespace Joints {
     namespace Radians {
         // Speed of motors in RPM
         const float MOTOR1_NO_LOAD_SPEED_RPM = 8700;
