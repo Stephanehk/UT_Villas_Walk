@@ -1,3 +1,6 @@
+#ifndef _SENSOR_VAL
+#define _SENSOR_VAL
+
 #include "walk/bodyV6.hpp"
 #include "walk/JointValues.hpp"
 #include "nao_sensor_msgs/msg/joint_positions.hpp"
@@ -5,7 +8,7 @@
 #include "nao_sensor_msgs/msg/angle.hpp"
 #include "nao_sensor_msgs/msg/fsr.hpp"
 #include "nao_command_msgs/msg/joint_positions.hpp"
-#include "nao_command_msgs/msg/joint_stiffness.hpp"
+#include "nao_command_msgs/msg/joint_stiffnesses.hpp"
 
 /**
  * A container for joint values, IMU values, FSR values, buttons and sonar
@@ -36,6 +39,8 @@ struct SensorValues
    void populate_angles(nao_sensor_msgs::msg::Angle angles);
    void populate_fsr(nao_sensor_msgs::msg::FSR fsr);
 
-   void make_joint_msgs(const JointValues &joints, nao_command_msgs::msg::JointPositions &joint_angles,  nao_command_msgs::msg::JointStiffness &joint_stiffness);
+   // void make_joint_msgs(const JointValues &joints, nao_command_msgs::msg::JointPositions &joint_angles,  nao_command_msgs::msg::JointStiffnesses &joint_stiffness);
 };
+
+#endif
 

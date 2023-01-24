@@ -1,4 +1,6 @@
-#pragma once
+#ifndef _BODY_MODEL
+#define _BODY_MODEL
+
 #include <iostream>
 #include <list>
 #include "walk/WalkCycle.hpp"
@@ -46,3 +48,4 @@ class BodyModel {
       XYZ_Coord centreOfMassOther; // other foot
 };
 
+#endif

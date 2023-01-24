@@ -37,7 +37,7 @@ struct ActionCommand
     };
     ActionType actionType;
 
-    ActionCommand():actionType(WALK){}
+    ActionCommand():actionType(WALK), leftArmBehind(false), rightArmBehind(false){}
 
     // Walk/Kick Parameters
     int forward; // How far forward (negative for backwards)  (mm)
@@ -48,6 +48,8 @@ struct ActionCommand
     float speed;
 
     bool blocking;
+    bool leftArmBehind;
+    bool rightArmBehind;
 
     void make_from_walk_command(walk_msg::msg::Walk &walk_command);
 };

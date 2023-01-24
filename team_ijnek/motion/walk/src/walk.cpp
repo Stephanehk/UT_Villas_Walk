@@ -22,7 +22,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
+#include <cmath>
+#include <cstdio>
+#include <algorithm>
 #include "walk/walk.hpp"
 #include "walk/maths_functions.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -34,13 +36,14 @@
 #include "walk/BodyModel.hpp"
 #include "walk/Sensors.hpp"
 #include "walk/JointValues.hpp"
+#include "walk/basic_math.hpp"
 
 #define KICK_STEP_HEIGHT 0.065  // how far to lift kicking foot
 
-namespace Joints = V6Joints;
+namespace Joints = Joints;
 namespace Limbs = V6Limbs;
 namespace LEDs = V6LEDs;
-namespace Sensors = V6Sensors;
+namespace Sensors = Sensors;
 
 
 #define EPSILON 0.01       //10 mm
@@ -160,7 +163,67 @@ void Walk::start()
 
 }
 
-JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues &sensors, const BodyModel &bodeyModel)
+float ellipsoidClampWalk(float &forward, float &left, float &turn, float speed) {
+    const float MIN_SPEED = 0.0f;
+    const float MAX_SPEED = 1.0f;
+    speed = crop(speed, MIN_SPEED, MAX_SPEED);
+
+    // limit max to 66-100% depending on speed
+    float M_FORWARD = MAX_FORWARD * 0.66 + MAX_FORWARD * 0.34 * speed;
+    float M_LEFT = MAX_LEFT * 0.66 + MAX_LEFT * 0.34 * speed;
+    float M_TURN = MAX_TURN * 0.66 + MAX_TURN * 0.34 * speed;
+
+    // Values in range [-1..1]
+    float forwardAmount = forward / M_FORWARD;
+    float leftAmount = left / M_LEFT;
+    float turnAmount = turn / M_TURN;
+
+    float x = fabs(forwardAmount);
+    float y = fabs(leftAmount);
+    float z = fabs(turnAmount);
+
+    // see if the point we are given is already inside the allowed walk params volume
+    if (evaluateWalkVolume(x, y, z) > 1.0) {
+        float scale = 0.5;
+        float high = 1.0;
+        float low = 0.0;
+
+        // This is basically a binary search to find the point on the surface.
+        for (unsigned i = 0; i < 10; i++) {
+            x = fabs(forwardAmount) * scale;
+            y = fabs(leftAmount) * scale;
+            z = fabs(turnAmount) * scale;
+
+            if (evaluateWalkVolume(x, y, z) > 1.0) {
+                float newScale = (scale + low) / 2.0;
+                high = scale;
+                scale = newScale;
+            } else {
+                float newScale = (scale + high) / 2.0;
+                low = scale;
+                scale = newScale;
+            }
+        }
+
+        forwardAmount *= scale;
+        leftAmount *= scale;
+        turnAmount *= scale;
+    }
+
+    forward = M_FORWARD * forwardAmount;
+    left = M_LEFT * leftAmount;
+    turn = M_TURN * turnAmount;
+    float volume = evaluateWalkVolume(x, y, z);
+    return volume;
+}
+
+// x = forward, y = left, z = turn
+float evaluateWalkVolume(float x, float y, float z) {
+    return sqrt(x * x + y * y + z * z);
+}
+
+
+JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues &sensors, BodyModel &bodyModel)
 {
   // 0. The very first time walk is called, the previous stand height could have been anything, so make sure we interpolate from that
     if (walk2014Option == NONE) {
@@ -627,8 +690,10 @@ JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues 
         } else if (walkState == STOPPING) {
             nextFootSwitchT = T;
             walkState = NOT_WALKING;
-        } else
-            llog(FATAL) << "Should never get here: walkState error" << endl;
+        } else{
+            // Should never reach here
+        }
+            // llog(FATAL) << "Should never get here: walkState error" << endl;
         // 6.3 reset step phase time
         t = 0;                                         // reset step phase timer
         // 6.4 backup values
@@ -695,7 +760,7 @@ JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues 
     }
 
     // 8. Odometry update for localisation
-    *odometry = *odometry + motionOdometry.updateOdometry(sensors, updateOdometry(bodyModel.isLeftPhase));
+    // *odometry = *odometry + motionOdometry.updateOdometry(sensors, updateOdometry(bodyModel.isLeftPhase));
 
     // 9. Work out joint angles from walk variables above
 
@@ -906,97 +971,37 @@ JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues 
     j.angles[Joints::RAnkleRoll] = ArR;
 
     // Add in joint adjustments for kicks
-    if (walk2014Option == KICK) {
-        addKickJoints(j);
-        // Add in some coronal balancing
-        if (bodyModel.isLeftPhase) {
-            j.angles[Joints::RAnkleRoll] += coronalBalanceAdjustment;
-            if(hipBalance == true) {
-                j.angles[Joints::RHipRoll] += coronalBalanceAdjustment / 2;
-            }
-        }
-        else {
-            j.angles[Joints::LAnkleRoll] += coronalBalanceAdjustment;
-            if(hipBalance == true) {
-                j.angles[Joints::LHipRoll] += coronalBalanceAdjustment / 2;
-            }
-        }
-    }
+    // if (walk2014Option == KICK) {
+    //     addKickJoints(j);
+    //     // Add in some coronal balancing
+    //     if (bodyModel.isLeftPhase) {
+    //         j.angles[Joints::RAnkleRoll] += coronalBalanceAdjustment;
+    //         if(hipBalance == true) {
+    //             j.angles[Joints::RHipRoll] += coronalBalanceAdjustment / 2;
+    //         }
+    //     }
+    //     else {
+    //         j.angles[Joints::LAnkleRoll] += coronalBalanceAdjustment;
+    //         if(hipBalance == true) {
+    //             j.angles[Joints::LHipRoll] += coronalBalanceAdjustment / 2;
+    //         }
+    //     }
+    // }
 
     // Fill out some debug information
-    motionDebugInfo.feetPosition = FeetPosition(
-      MM_PER_M * -forwardL, MM_PER_M * leftL, RAD2DEG(turnRL),
-      MM_PER_M * -forwardR, MM_PER_M * leftR, RAD2DEG(-turnRL));
+    // motionDebugInfo.feetPosition = FeetPosition(
+    //   MM_PER_M * -forwardL, MM_PER_M * leftL, RAD2DEG(turnRL),
+    //   MM_PER_M * -forwardR, MM_PER_M * leftR, RAD2DEG(-turnRL));
 
     return j;
   
 }
 
 
-
-float ellipsoidClampWalk(float &forward, float &left, float &turn, float speed) {
-    const float MIN_SPEED = 0.0f;
-    const float MAX_SPEED = 1.0f;
-    speed = crop(speed, MIN_SPEED, MAX_SPEED);
-
-    // limit max to 66-100% depending on speed
-    float M_FORWARD = MAX_FORWARD * 0.66 + MAX_FORWARD * 0.34 * speed;
-    float M_LEFT = MAX_LEFT * 0.66 + MAX_LEFT * 0.34 * speed;
-    float M_TURN = MAX_TURN * 0.66 + MAX_TURN * 0.34 * speed;
-
-    // Values in range [-1..1]
-    float forwardAmount = forward / M_FORWARD;
-    float leftAmount = left / M_LEFT;
-    float turnAmount = turn / M_TURN;
-
-    float x = fabs(forwardAmount);
-    float y = fabs(leftAmount);
-    float z = fabs(turnAmount);
-
-    // see if the point we are given is already inside the allowed walk params volume
-    if (evaluateWalkVolume(x, y, z) > 1.0) {
-        float scale = 0.5;
-        float high = 1.0;
-        float low = 0.0;
-
-        // This is basically a binary search to find the point on the surface.
-        for (unsigned i = 0; i < 10; i++) {
-            x = fabs(forwardAmount) * scale;
-            y = fabs(leftAmount) * scale;
-            z = fabs(turnAmount) * scale;
-
-            if (evaluateWalkVolume(x, y, z) > 1.0) {
-                float newScale = (scale + low) / 2.0;
-                high = scale;
-                scale = newScale;
-            } else {
-                float newScale = (scale + high) / 2.0;
-                low = scale;
-                scale = newScale;
-            }
-        }
-
-        forwardAmount *= scale;
-        leftAmount *= scale;
-        turnAmount *= scale;
-    }
-
-    forward = M_FORWARD * forwardAmount;
-    left = M_LEFT * leftAmount;
-    turn = M_TURN * turnAmount;
-    float volume = evaluateWalkVolume(x, y, z);
-    return volume;
-}
-
-// x = forward, y = left, z = turn
-float evaluateWalkVolume(float x, float y, float z) {
-    return sqrt(x * x + y * y + z * z);
-}
-
 // Stiffness required by the knee to keep stability
 // Equation was found by finding the lowest stiffness that was stable at a continous requested speed
 // Relate each speed to the corresponding volume and curve fit
-float Walk2014Generator::calculateKneeStiffness(float volume) {
+float Walk::calculateKneeStiffness(float volume) {
     float stiffness = -0.42 * (volume * volume) + volume + 0.395;
     stiffness = ceilf(MIN(1,MAX(0.4,stiffness)) * 100) / 100;    // Min and max (2 dp) required stiffness
     return stiffness;
@@ -1004,7 +1009,7 @@ float Walk2014Generator::calculateKneeStiffness(float volume) {
 // Stiffness required by the ankle to keep stability
 // Equation was found by setting the lowest stiffness that was stable at a continous requested speed
 // Relate each speed to the corresponding volume and curve fit
-float Walk2014Generator::calculateAnkleStiffness(float volume) {
+float Walk::calculateAnkleStiffness(float volume) {
     float stiffness = -0.32 * (volume * volume) + 0.76 * volume + 0.56;
     stiffness = ceilf(MIN(1,MAX(0.55,stiffness)) * 100) / 100;    // Min and max (2 dp) required stiffness
     return stiffness;

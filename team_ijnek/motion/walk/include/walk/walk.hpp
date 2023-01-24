@@ -19,6 +19,7 @@
 #include "walk/XYZ_Coord.hpp"
 #include "walk/ActionCommand.hpp"
 #include "walk/Sensors.hpp"
+#include "walk/BodyModel.hpp"
 
 
 class Walk
@@ -26,7 +27,7 @@ class Walk
 public:
   Walk();
   void start();
-  JointValues notifyJoints(const ActionCommand &command, const SensorValues &sensors, const BodyModel &bodeyModel);
+  JointValues notifyJoints(const ActionCommand &command, const SensorValues &sensors, BodyModel &bodeyModel);
  
 
   enum Walk2014Option {

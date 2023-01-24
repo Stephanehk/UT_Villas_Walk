@@ -1,6 +1,9 @@
-#include "motion/MotionDefs.hpp"
+#include "walk/MotionDefs.hpp"
+#include "walk/bodyV6.hpp"
+#include <iostream>
 
 // Calculate Rad/MOTION_DT, so how much the joint can move in frame
+#define M_PI 3.14
 #define CALCULATE_RAD_P_MOTION_DT(rpm, ratio) ((rpm * (2 * M_PI) / 60) * MOTION_DT) / ratio
 
 namespace Joints {
@@ -37,7 +40,7 @@ namespace Joints {
         const float AnklePitchSpeed      = CALCULATE_RAD_P_MOTION_DT(MOTOR5_NO_LOAD_SPEED_RPM, MOTOR5_REDUCTIONA_RATIO);
         const float AnkleRollSpeed       = CALCULATE_RAD_P_MOTION_DT(MOTOR1_NO_LOAD_SPEED_RPM, MOTOR1_REDUCTIONA_RATIO);
 
-        const float MaxSpeed[NUMBER_OF_JOINTS] = {
+        const float MaxSpeed[Joints::NUMBER_OF_JOINTS] = {
                 HeadYawSpeed,
                 HeadPitchSpeed,
                 ShoulderPitchSpeed,  // Left arm
@@ -66,8 +69,8 @@ namespace Joints {
         };
     }
 
-   void outputValues(std::ostream &os, const float values[NUMBER_OF_JOINTS]) {
-      for (int j = 0; j < NUMBER_OF_JOINTS; ++j) {
+   void outputValues(std::ostream &os, const float values[Joints::NUMBER_OF_JOINTS]) {
+      for (int j = 0; j < Joints::NUMBER_OF_JOINTS; ++j) {
          os << jointNames[j] << ":\t" << values[j] << '\n';
       }
    }

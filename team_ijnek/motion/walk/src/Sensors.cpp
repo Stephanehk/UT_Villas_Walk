@@ -6,7 +6,7 @@
 #include "nao_sensor_msgs/msg/angle.hpp"
 #include "nao_sensor_msgs/msg/fsr.hpp"
 #include "nao_command_msgs/msg/joint_positions.hpp"
-#include "nao_command_msgs/msg/joint_stiffness.hpp"
+#include "nao_command_msgs/msg/joint_stiffnesses.hpp"
 
 
 void SensorValues::populate_joint_positions(nao_sensor_msgs::msg::JointPositions::SharedPtr joint_positions)
@@ -47,19 +47,4 @@ void SensorValues::populate_fsr(nao_sensor_msgs::msg::FSR::SharedPtr fsr)
     sensors[Sensors::RFoot_FSR_FrontRight] = fsr->r_foot_front_right;
     sensors[Sensors::RFoot_FSR_RearLeft] = fsr->r_foot_back_left;
     sensors[Sensors::RFoot_FSR_RearRight] = fsr->r_foot_back_right;
-}
-
-void make_joint_msgs(const JointValues &joints, nao_command_msgs::msg::JointPositions &joint_angles,  nao_command_msgs::msg::JointStiffness &joint_stiffness)
-{
-    for(auto i = 0; i < Joints::NUMBER_OF_JOINTS; i++)
-    {
-        joint_stiffness.indexes.push_back(i);
-        joint_stiffness.positions.push_back(joints.stiffness[i]);
-    }
-
-    for(auto i = Joints::LShoulderPitch; i <= Joints::RWristYaw; i++)
-    {
-        joint_angles.indexes.push_back(i);
-        joint_angles.positions.push_back(joints.angles[i]);
-    }
 }

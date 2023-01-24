@@ -36,7 +36,17 @@ find_package(walk_utils REQUIRED)
 ament_export_include_directories(include)
 
 # Build walk
+
+add_library(sensorvalues src/Sensors.cpp)
+
+add_library(actioncommand src/ActionCommand.cpp)
+add_library(bodymodel src/BodyModel.cpp)
+add_library(bodyv6 src/bodyV6.cpp)
+add_library(mathfunctions src/maths_functions.cpp)
+add_library(walkcycle src/WalkCycle.cpp)
+
 add_library(walk src/walk.cpp)
+
 ament_target_dependencies(walk
   motion_interfaces
   std_msgs
@@ -51,7 +61,7 @@ ament_target_dependencies(walk
 
 # Build walk_node
 add_executable(walk_node src/walk_node.cpp)
-target_link_libraries(walk_node walk)
+target_link_libraries(walk_node walk sensorvalues)
 ament_target_dependencies(walk_node
   rclcpp)
 
