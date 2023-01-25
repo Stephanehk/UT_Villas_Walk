@@ -51,7 +51,7 @@ struct ActionCommand
     bool leftArmBehind;
     bool rightArmBehind;
 
-    void make_from_walk_command(walk_msg::msg::Walk &walk_command);
+    void make_from_walk_command(walk_msg::msg::Walk::SharedPtr walk_command);
 };
 
 

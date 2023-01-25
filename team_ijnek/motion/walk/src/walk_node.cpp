@@ -62,7 +62,7 @@ public:
       "sensors/joint_positions", 1,
       [this](nao_sensor_msgs::msg::JointPositions::SharedPtr sensor_joints) {
         
-        sensor_values.populate_joint_positions(*sensor_joints);
+        sensor_values.populate_joint_positions(sensor_joints);
 
         if (this->started_walk)
         {
@@ -80,7 +80,7 @@ public:
       [this](nao_sensor_msgs::msg::Gyroscope::SharedPtr gyr) {
    
          //RCLCPP_INFO(this->get_logger(), "Recived gyroscope reading, x=%f, y = %f, z=%f\n",gyr->x, gyr->y, gyr->z);
-        sensor_values.populate_gyro(*gyr);
+        sensor_values.populate_gyro(gyr);
 
       }
     );
@@ -90,7 +90,7 @@ public:
       [this](nao_sensor_msgs::msg::Angle::SharedPtr angle) {
        
          //RCLCPP_INFO(this->get_logger(), "Recived gyroscope reading, x=%f, y = %f, z=%f\n",gyr->x, gyr->y, gyr->z);
-        sensor_values.populate_angles(*angle);
+        sensor_values.populate_angles(angle);
 
       }
     );
@@ -99,7 +99,7 @@ public:
       "sensors/fsr", 1,
       [this](nao_sensor_msgs::msg::FSR::SharedPtr fsr) {
    
-        sensor_values.populate_fsr(*fsr);
+        sensor_values.populate_fsr(fsr);
 
       }
     );
@@ -110,7 +110,7 @@ public:
       "motion/walk", 10,
       [this](walk_msg::msg::Walk::SharedPtr walk_command) {
         this->started_walk = true;
-        action_command.make_from_walk_command(*walk_command);
+        action_command.make_from_walk_command(walk_command);
         walk.start();
       });
 

@@ -1,5 +1,6 @@
 #include "walk/BodyModel.hpp"
 #include "walk/bodyV6.hpp"
+#include "walk/basic_math.hpp"
 // #include "utils/matrix_helpers.hpp"
 
 BodyModel::BodyModel()

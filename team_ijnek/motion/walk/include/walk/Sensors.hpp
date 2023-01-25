@@ -34,10 +34,10 @@ struct SensorValues
    JointValues joints;
    float sensors[Sensors::NUMBER_OF_SENSORS];
 
-   void populate_joint_positions(nao_sensor_msgs::msg::JointPositions joint_positions);
-   void populate_gyro(nao_sensor_msgs::msg::Gyroscope gyro);
-   void populate_angles(nao_sensor_msgs::msg::Angle angles);
-   void populate_fsr(nao_sensor_msgs::msg::FSR fsr);
+   void populate_joint_positions(nao_sensor_msgs::msg::JointPositions::SharedPtr joint_positions);
+   void populate_gyro(nao_sensor_msgs::msg::Gyroscope::SharedPtr gyro);
+   void populate_angles(nao_sensor_msgs::msg::Angle::SharedPtr angles);
+   void populate_fsr(nao_sensor_msgs::msg::FSR::SharedPtr fsr);
 
    // void make_joint_msgs(const JointValues &joints, nao_command_msgs::msg::JointPositions &joint_angles,  nao_command_msgs::msg::JointStiffnesses &joint_stiffness);
 };
