@@ -20,15 +20,18 @@
 #include "walk/ActionCommand.hpp"
 #include "walk/Sensors.hpp"
 #include "walk/BodyModel.hpp"
+#include "rclcpp/rclcpp.hpp"
+
 
 
 class Walk
 {
 public:
-  Walk();
+  Walk(rclcpp::Node* walkNode);
   void start();
   JointValues notifyJoints(const ActionCommand &command, const SensorValues &sensors, BodyModel &bodeyModel);
- 
+  
+  rclcpp::Node* walkNode;
 
   enum Walk2014Option {
     STAND        = 0, // with knees straight and stiffness set to zero to conserve energy and heat generation in motors
@@ -227,6 +230,5 @@ float calculateAnkleStiffness(float volume);
                  float Ar, float xf, float yf, float zf, XYZ_Coord e);
 
  float clamp(const int min, float value, const int max) const;
-
-#endif  // KICK__KICK_HPP_
 };
+#endif  // KICK__KICK_HPP_

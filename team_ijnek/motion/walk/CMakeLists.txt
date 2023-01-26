@@ -47,7 +47,11 @@ add_library(actioncommand src/ActionCommand.cpp)
 ament_target_dependencies(actioncommand
   walk_msg)
 
+add_library(walkcycle src/WalkCycle.cpp)
+ament_target_dependencies(walkcycle)
+
 add_library(bodymodel src/BodyModel.cpp)
+target_link_libraries(bodymodel walkcycle)
 ament_target_dependencies(bodymodel
   nao_sensor_msgs
   nao_command_msgs
@@ -59,8 +63,7 @@ ament_target_dependencies(bodyv6)
 add_library(mathfunctions src/maths_functions.cpp)
 ament_target_dependencies(mathfunctions)
 
-add_library(walkcycle src/WalkCycle.cpp)
-ament_target_dependencies(walkcycle)
+
 
 add_library(walk src/walk.cpp)
 ament_target_dependencies(walk
@@ -76,8 +79,8 @@ ament_target_dependencies(walk
   walk_utils)
 
 # Build walk_node
-add_library(walk_node src/walk_node.cpp)
-target_link_libraries(walk_node walk sensorvalues)
+add_executable(walk_node src/walk_node.cpp)
+target_link_libraries(walk_node walk sensorvalues actioncommand bodymodel)
 ament_target_dependencies(walk_node
   rclcpp)
 

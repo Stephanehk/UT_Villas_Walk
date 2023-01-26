@@ -8,5 +8,6 @@ void ActionCommand::make_from_walk_command(walk_msg::msg::Walk::SharedPtr walk_c
     power = walk_command->power;
     bend = walk_command->bend;
     speed = walk_command->speed;
-    blocking = walk_command->blocking;
+    blocking = false;
+    //blocking =walk_command->blocking;
 }

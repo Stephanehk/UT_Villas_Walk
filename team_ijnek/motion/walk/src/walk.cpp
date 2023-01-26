@@ -86,9 +86,16 @@ const float z = 0;
 
 float evaluateWalkVolume(float x, float y, float z);
 
+Walk::Walk(rclcpp::Node* walkNode)
+
+{   //rclcpp::Node* walkNode
+    walkNode = walkNode;
+  
+}
+
 void Walk::start()
 {
-  
+ // RCLCPP_INFO(walkNode->get_logger(), "in walk recieved walk command\n");
   dt = MOTION_DT;
   t = 0.0;                                   // initialise timers (in seconds)
   timer = 0.0;                            // timer to crouch to walking height
@@ -472,6 +479,9 @@ JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues 
             walk2014Option = CROUCH;                       // continue crouching
         }
     }
+
+   // RCLCPP_INFO(walkNode->get_logger(), "walk2014Option=%d, hiph = %f\n",walk2014Option, hiph);
+
 
     // 4. Execute Walk2014 Option
     if (walk2014Option == STAND) { // Place CoM over ankle and turn set power to motors

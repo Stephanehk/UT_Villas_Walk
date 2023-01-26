@@ -55,8 +55,9 @@ class WalkNode : public rclcpp::Node
 {
 public:
   WalkNode()
-  : Node("WalkNode"), sensor_values(true)
+  : Node("WalkNode"), sensor_values(true), walk(this)
   {
+    RCLCPP_INFO(this->get_logger(), "Hello from walknode\n");
     sub_joint_states =
       create_subscription<nao_sensor_msgs::msg::JointPositions>(
       "sensors/joint_positions", 1,
@@ -66,6 +67,7 @@ public:
 
         if (this->started_walk)
         {
+          //RCLCPP_INFO(this->get_logger(), "Notifying joints...\n");
           JointValues j = walk.notifyJoints(action_command, sensor_values, bodyModel);
           make_joint_msgs(j, joint_angles, joint_stiffness);
 
@@ -98,7 +100,7 @@ public:
     sub_fsr = create_subscription<nao_sensor_msgs::msg::FSR>(
       "sensors/fsr", 1,
       [this](nao_sensor_msgs::msg::FSR::SharedPtr fsr) {
-   
+        
         sensor_values.populate_fsr(fsr);
 
       }
@@ -110,6 +112,7 @@ public:
       "motion/walk", 10,
       [this](walk_msg::msg::Walk::SharedPtr walk_command) {
         this->started_walk = true;
+        RCLCPP_INFO(this->get_logger(), "Recieved walk command\n");
         action_command.make_from_walk_command(walk_command);
         walk.start();
       });

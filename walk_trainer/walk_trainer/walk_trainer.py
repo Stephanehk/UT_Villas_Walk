@@ -311,8 +311,12 @@ def main():
 
     time.sleep(5)
 
-    #send message with walk params
+    # #send message with walk params
     msg = walk_msg.msg.Walk()
+    msg.forward = 100.0
+    msg.speed = 0.0
+    msg.bend = 1.0
+    msg.power = 1.0
     
 
     node = MinimalPublisher(msg)
