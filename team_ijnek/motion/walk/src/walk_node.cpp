@@ -122,7 +122,7 @@ public:
     // pub_walk_done = create_publisher<std_msgs::msg::Empty>("motion/walk_done", 1);
 
     pub_joint_angles = create_publisher<nao_command_msgs::msg::JointPositions>("effectors/joint_positions", 1);
-    pub_joint_stiffness = create_publisher<nao_command_msgs::msg::JointStiffnesses>("effectors/joint_stiffness", 1);
+    pub_joint_stiffness = create_publisher<nao_command_msgs::msg::JointStiffnesses>("effectors/joint_stiffnesses", 1);
 
   }
 

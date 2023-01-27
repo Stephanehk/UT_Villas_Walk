@@ -68,7 +68,7 @@ const float CROUCH_STAND_PERIOD = 0.5;              // time in seconds to crouch
 const float COM_OFFSET_CROUCH = 0.01; // center of mass offset in x direction in meters when crouched, so that the CoM lies at the centre of the heel and toe
 const float COM_OFFSET_FORWARDS = 0.022;   // center of mass offset in x direction in meters when walking forwards
 const float COM_OFFSET_BACKWARDS = 0.01;   // center of mass offset in x direction in meters when walking backwards
-const float FORWARD_CHANGE = 0.06; // max change of 80mm/sec at each leg change
+const float FORWARD_CHANGE = 0.06; //was 0.06, max change of 80mm/sec at each leg change
 const float LEFT_CHANGE = 0.1; // max change of 100mm/sec at each leg change
 const float TURN_CHANGE = 1.0; // max change of 1.0rad/sec at each leg change (only when forward < MAX_FORWARD_TURN_CHANGE_SLOW)
 const float TURN_CHANGE_SLOW = 0.5;     // when forward > MAX_FORWARD_RESTRICT_TURN_CHANGE
@@ -235,6 +235,7 @@ float evaluateWalkVolume(float x, float y, float z) {
 
 JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues &sensors, BodyModel &bodyModel)
 {
+    bodyModel.update(sensors);
   // 0. The very first time walk is called, the previous stand height could have been anything, so make sure we interpolate from that
     if (walk2014Option == NONE) {
         // Calculate the current hip height by checking how bent the knee is
@@ -679,7 +680,7 @@ JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues 
         supportFoothasChanged = true;
         weightHasShifted = true;
         bodyModel.setIsLeftPhase(!bodyModel.isLeftPhase);
-        shouldEmergencyStep = true;
+        //shouldEmergencyStep = true;
     }
     if (supportFoothasChanged and walk2014Option == WALK) {
         supportFoothasChanged = false;                      //reset
