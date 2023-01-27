@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <iostream>
 #include "walk/walk.hpp"
 #include "walk/maths_functions.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -95,6 +96,8 @@ Walk::Walk(rclcpp::Node* walkNode)
 
 void Walk::start()
 {
+
+//   std::cout << "INSIDE WALK START\n";
  // RCLCPP_INFO(walkNode->get_logger(), "in walk recieved walk command\n");
   dt = MOTION_DT;
   t = 0.0;                                   // initialise timers (in seconds)
@@ -240,7 +243,8 @@ JointValues Walk::notifyJoints(const ActionCommand &command, const SensorValues 
 
     // 1. Read in new walk values (forward, left, turn, power) only at the start of a walk step cycle, ie when t = 0
     if (t == 0) {
-        if (shouldEmergencyStep)
+        // if (shouldEmergencyStep)
+        if (false)
         {
             // Try and move sideways to free ourselves when we're stuck on a goal post or another robot
             forward = 0;
