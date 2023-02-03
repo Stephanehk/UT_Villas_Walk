@@ -131,14 +131,14 @@ private:
   float sagittalHipBalanceAdjustment;
 
   // PD gyro controller
-  float KpGyro;           // Proportional gain
-  float KdGyro;           // Derivative gain
+  float KpGyro = 0.07f;           // Proportional gain
+  float KdGyro = 0.0003934f;           // Derivative gain
   float preErrorGyro;      // Previous tick gyro error
 
   // PID Angle controller
-  float KpAngle;          // Proportional gain
-  float KiAngle;          // Integral gain
-  float KdAngle;          // Derivative gain
+  float KpAngle = 0.2f;          // Proportional gain
+  float KiAngle = 0.05f;          // Integral gain
+  float KdAngle = 0.008f;          // Derivative gain
   float angleError;       // Current angle error
   float angleErrorSum;    // Error sum
   float preErrorAngle;    // Previous tick angle error
